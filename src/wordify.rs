@@ -1,3 +1,5 @@
+use dissimilar::{diff, Chunk};
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum InputChunk<'a> {
     Equal(&'a str),
@@ -23,7 +25,17 @@ impl InputChunk<'_> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+impl<'a> From<&'a Chunk<'a>> for InputChunk<'a> {
+    fn from(chunk: &'a Chunk<'a>) -> Self {
+        match chunk {
+            Chunk::Equal(s) => InputChunk::Equal(s),
+            Chunk::Delete(s) => InputChunk::Delete(s),
+            Chunk::Insert(s) => InputChunk::Insert(s),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum OutputChunk {
     Equal(String),
     Delete(String),
@@ -206,7 +218,40 @@ fn wordify(chunks: &[InputChunk]) -> Vec<OutputChunk> {
             }
         }
     }
-    output
+    consolidate_chunks(&output)
+}
+
+fn consolidate_chunks(chunks: &[OutputChunk]) -> Vec<OutputChunk> {
+    let mut consolidated = Vec::new();
+    for chunk in chunks.iter() {
+        let last_chunk = consolidated.last_mut();
+        if let Some(last_chunk) = last_chunk {
+            match (last_chunk, chunk) {
+                (OutputChunk::Equal(a), OutputChunk::Equal(b)) => {
+                    a.push_str(b);
+                }
+                (OutputChunk::Delete(a), OutputChunk::Delete(b)) => {
+                    a.push_str(b);
+                }
+                (OutputChunk::Insert(a), OutputChunk::Insert(b)) => {
+                    a.push_str(b);
+                }
+                _ => {
+                    let cloned = chunk.clone();
+                    consolidated.push(cloned);
+                }
+            }
+        } else {
+            let cloned = chunk.clone();
+            consolidated.push(cloned);
+        }
+    }
+    consolidated
+}
+
+fn wordify_diff(a: &str, b: &str) -> Vec<OutputChunk> {
+    let chunks = diff(a, b);
+    wordify(&chunks.iter().map(|chunk| chunk.into()).collect::<Vec<_>>())
 }
 
 #[cfg(test)]
@@ -498,8 +543,7 @@ mod tests {
         assert_eq!(
             chunks,
             vec![
-                OutputChunk::Equal("Hello".to_string()),
-                OutputChunk::Equal(" ".to_string()),
+                OutputChunk::Equal("Hello ".to_string()),
                 OutputChunk::Delete("world".to_string()),
                 OutputChunk::Insert("word".to_string())
             ]
@@ -518,10 +562,24 @@ mod tests {
         assert_eq!(
             chunks,
             vec![
-                OutputChunk::Equal("Hello".to_string()),
-                OutputChunk::Equal(" ".to_string()),
+                OutputChunk::Equal("Hello ".to_string()),
                 OutputChunk::Delete("foo".to_string()),
                 OutputChunk::Insert("bar".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn test_wordify_diff() {
+        let a = "Hello world";
+        let b = "Hello word, bye universe!";
+        let chunks = wordify_diff(a, b);
+        assert_eq!(
+            chunks,
+            vec![
+                OutputChunk::Equal("Hello ".to_string()),
+                OutputChunk::Delete("world".to_string()),
+                OutputChunk::Insert("word, bye universe!".to_string()),
             ]
         );
     }
