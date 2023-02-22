@@ -55,6 +55,16 @@ struct AnnotatedWord<'a> {
     chunks: Vec<&'a InputChunk<'a>>,
 }
 
+impl<'a> AnnotatedWord<'a> {
+    fn is_equal(&self) -> bool {
+        self.chunks.len() == 1
+            && !matches!(
+                self.chunks[0],
+                InputChunk::Insert(_) | InputChunk::Delete(_)
+            )
+    }
+}
+
 fn reconstruct_a<'a>(chunks: &'a [InputChunk<'a>]) -> AnnotatedString<'a> {
     let mut string = String::new();
     let mut annotations = Vec::new();
@@ -107,61 +117,96 @@ fn reconstruct_b<'a>(chunks: &'a [InputChunk<'a>]) -> AnnotatedString<'a> {
     }
 }
 
-fn annotated_words<'a>(annotated: &AnnotatedString<'a>) -> Vec<AnnotatedWord<'a>> {
-    let mut words = Vec::new();
-    let mut current_word = String::new();
-    let mut current_chunks = Vec::new();
-    let mut current_category = WordCategory::Between;
+impl<'a> AnnotatedString<'a> {
+    fn words(&self) -> Vec<AnnotatedWord<'a>> {
+        let mut words = Vec::new();
+        let mut current_word = String::new();
+        let mut current_chunks = Vec::new();
+        let mut current_category = WordCategory::Between;
 
-    for annotation in &annotated.annotations {
-        let chunk = annotation.chunk;
+        for annotation in &self.annotations {
+            let chunk = annotation.chunk;
 
-        for c in chunk.value().chars() {
-            if c.is_whitespace() || c.is_ascii_punctuation() {
-                if current_category == WordCategory::Word {
-                    words.push(AnnotatedWord {
-                        category: WordCategory::Word,
-                        word: current_word.clone(),
-                        chunks: current_chunks.clone(),
-                    });
-                    current_category = WordCategory::Between;
+            for c in chunk.value().chars() {
+                if c.is_whitespace() || c.is_ascii_punctuation() {
+                    if current_category == WordCategory::Word {
+                        words.push(AnnotatedWord {
+                            category: WordCategory::Word,
+                            word: current_word.clone(),
+                            chunks: current_chunks.clone(),
+                        });
+                        current_category = WordCategory::Between;
+                        current_word.clear();
+                        current_chunks.clear();
+                    }
+                } else if current_category == WordCategory::Between {
+                    if !current_word.is_empty() {
+                        words.push(AnnotatedWord {
+                            category: WordCategory::Between,
+                            word: current_word.clone(),
+                            chunks: current_chunks.clone(),
+                        });
+                    }
+                    current_category = WordCategory::Word;
                     current_word.clear();
                     current_chunks.clear();
                 }
-            } else if current_category == WordCategory::Between {
-                if !current_word.is_empty() {
-                    words.push(AnnotatedWord {
-                        category: WordCategory::Between,
-                        word: current_word.clone(),
-                        chunks: current_chunks.clone(),
-                    });
+                current_word.push(c);
+                if current_chunks.last() != Some(&chunk) {
+                    current_chunks.push(chunk);
                 }
-                current_category = WordCategory::Word;
-                current_word.clear();
-                current_chunks.clear();
-            }
-            current_word.push(c);
-            if current_chunks.last() != Some(&chunk) {
-                current_chunks.push(chunk);
             }
         }
-    }
 
-    if !current_word.is_empty() {
-        words.push(AnnotatedWord {
-            category: current_category,
-            word: current_word.clone(),
-            chunks: current_chunks.clone(),
-        });
+        if !current_word.is_empty() {
+            words.push(AnnotatedWord {
+                category: current_category,
+                word: current_word.clone(),
+                chunks: current_chunks.clone(),
+            });
+        }
+        words
     }
-    words
 }
 
 fn wordify(chunks: &[InputChunk]) -> Vec<OutputChunk> {
     // take words of original and take words of change
     // then resequence words based on whether the word is in delete/insert at all
-
-    todo!();
+    let annotated_a = reconstruct_a(chunks);
+    let annotated_b = reconstruct_b(chunks);
+    let words_a = annotated_a.words();
+    let words_b = annotated_b.words();
+    let mut words_a_iter = words_a.iter().peekable();
+    let words_b_iter = words_b.iter();
+    let mut output = Vec::new();
+    for word_b in words_b_iter {
+        if word_b.is_equal() {
+            output.push(OutputChunk::Equal(word_b.word.clone()));
+            // the same word must exist in a
+            words_a_iter.next();
+            // a may contain deltes, which we can output
+            while let Some(word_a) = words_a_iter.peek() {
+                if word_a.is_equal() {
+                    break;
+                } else {
+                    output.push(OutputChunk::Delete(word_a.word.clone()));
+                    words_a_iter.next();
+                }
+            }
+        } else {
+            output.push(OutputChunk::Insert(word_b.word.clone()));
+            // a may contain deletes, which we can output
+            while let Some(word_a) = words_a_iter.peek() {
+                if word_a.is_equal() {
+                    break;
+                } else {
+                    output.push(OutputChunk::Delete(word_a.word.clone()));
+                    words_a_iter.next();
+                }
+            }
+        }
+    }
+    output
 }
 
 #[cfg(test)]
@@ -285,7 +330,7 @@ mod tests {
         ];
 
         let annotated = reconstruct_a(&chunks);
-        let annotated_words = annotated_words(&annotated);
+        let annotated_words = annotated.words();
 
         assert_eq!(
             annotated_words,
@@ -318,7 +363,7 @@ mod tests {
         ];
 
         let annotated = reconstruct_a(&chunks);
-        let annotated_words = annotated_words(&annotated);
+        let annotated_words = annotated.words();
 
         assert_eq!(
             annotated_words,
@@ -351,7 +396,7 @@ mod tests {
         ];
 
         let annotated = reconstruct_a(&chunks);
-        let annotated_words = annotated_words(&annotated);
+        let annotated_words = annotated.words();
 
         assert_eq!(
             annotated_words,
@@ -384,7 +429,7 @@ mod tests {
         ];
 
         let annotated = reconstruct_a(&chunks);
-        let annotated_words = annotated_words(&annotated);
+        let annotated_words = annotated.words();
 
         assert_eq!(
             annotated_words,
@@ -417,7 +462,7 @@ mod tests {
         ];
 
         let annotated = reconstruct_a(&chunks);
-        let annotated_words = annotated_words(&annotated);
+        let annotated_words = annotated.words();
 
         assert_eq!(
             annotated_words,
@@ -441,22 +486,43 @@ mod tests {
         )
     }
 
-    // #[test]
-    // fn test_wordify() {
-    //     let chunks = vec![
-    //         InputChunk::Equal("Hello wor"),
-    //         InputChunk::Delete("l"),
-    //         InputChunk::Equal("d"),
-    //     ];
+    #[test]
+    fn test_wordify() {
+        let chunks = vec![
+            InputChunk::Equal("Hello wor"),
+            InputChunk::Delete("l"),
+            InputChunk::Equal("d"),
+        ];
 
-    //     let chunks = wordify(&chunks);
-    //     assert_eq!(
-    //         chunks,
-    //         vec![
-    //             OutputChunk::Equal("Hello ".to_string()),
-    //             OutputChunk::Delete("world".to_string()),
-    //             OutputChunk::Insert("word".to_string())
-    //         ]
-    //     );
-    // }
+        let chunks = wordify(&chunks);
+        assert_eq!(
+            chunks,
+            vec![
+                OutputChunk::Equal("Hello".to_string()),
+                OutputChunk::Equal(" ".to_string()),
+                OutputChunk::Delete("world".to_string()),
+                OutputChunk::Insert("word".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn test_wordify2() {
+        let chunks = vec![
+            InputChunk::Equal("Hello "),
+            InputChunk::Delete("foo"),
+            InputChunk::Insert("bar"),
+        ];
+
+        let chunks = wordify(&chunks);
+        assert_eq!(
+            chunks,
+            vec![
+                OutputChunk::Equal("Hello".to_string()),
+                OutputChunk::Equal(" ".to_string()),
+                OutputChunk::Delete("foo".to_string()),
+                OutputChunk::Insert("bar".to_string())
+            ]
+        );
+    }
 }
